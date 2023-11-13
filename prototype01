@@ -1,0 +1,453 @@
+#================================================================================================
+#                       DESAFIO EM PROCESSAMENTO DIGITAL DE IMAGEM
+#--------------------------------------------------------------------------------------------
+# NOME: Felipe Augusto Cortez Muniz da Silva
+#--------------------------------------------------------------------------------------------
+# Dados de Entrada: Arquivos de imagem do diretório .\placas
+# Dados de Saída:   String Alfanuméricos representando as placas identificadas nas imagens
+#--------------------------------------------------------------------------------------------
+# Descrição: Este programa utiliza um motor de reconhecimento ótico de caracteres (OCR) de
+# código aberto conhecido como Tesseract. Ele foi desenvolvido pelo Google e é capaz de 
+# converter imagens de texto em arquivos de texto editáveis. O Tesseract é instalado a parte
+# no PC local e o acesso a sua funcionalidade é feito através da biblioteca pytesseract.
+# Essa biblioteca é uma interface para a utilização do Tesseract OCR na linguagem de programação 
+# Python. A biblioteca pytesseract atua como um wrapper em torno do Tesseract, fornecendo uma 
+# maneira mais conveniente de interagir com o OCR usando Python. Outra biblioteca usada neste
+# programa é OpenCV2 (Open Source Computer Vision Library). Esta biblioteca também é de código 
+# aberto e fornece ferramentas e algoritmos para processamento de imagens e visão computacional. 
+# A lógica do programa consiste em ler cada uma das imagens de carros do diretório de entrada
+# e submeter a imagem lida ao Tesseract. Caso a placa da imagem seja reconhecida, ela será impressa
+# na tela. Caso contrário, o programa tentará reprocessar a imagem para resubmete-la ao Tesseract.
+#================================================================================================
+
+import pytesseract          # Wrapper para acesso ao OCR Tesseract para python
+import cv2                  # Open Source Computer Vision Library para python
+import piexif               # Biblioteca para dados Exif (Exchangeable image file format) em imagens JPEG. 
+import os                   # Biblioteca para interagir com o sistema operacional
+import re                   # Biblioteca de suporte para expressões regulares  
+import random               # Biblioteca para gerar numeros aleatorios
+import csv                  # Biblioteca para trabalhar com arquivos CSV (Comma-Separated Values)
+from PIL import Image       # Biblioteca PIL (Python Imaging Library) 
+
+global total_placas
+#------------------------------------------------------------------
+# Configurando o caminho para o executável do Tesseract OCR
+#------------------------------------------------------------------
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  
+
+#===================================
+# FUNÇÃO: gera_coordenadas
+#===================================
+def gera_coordenadas():
+    # Gera coordenadas de GPS aleatórias
+    # I Am here http://maps.google.com/maps?t=m&q=-5.8133911,-35.1980664
+    delta = random.uniform(0, 10)
+    latitude = -5.8133911
+    longitude = -35.1980664+int(delta)
+    return latitude, longitude
+
+#=======================================
+# FUNÇÃO: 
+#=======================================
+def add_geolocation_to_image(image_path, latitude, longitude):
+    try:
+        # Carrega os dados EXIF da imagem
+        exif_dict = piexif.load(image_path)
+
+        # Converte as coordenadas para o formato esperado pelo piexif
+        latitude_deg = int(abs(latitude))
+        latitude_min = int((abs(latitude) - latitude_deg) * 60)
+        latitude_sec = int(((abs(latitude) - latitude_deg) * 60 - latitude_min) * 60)
+        latitude_ref = 'N' if latitude >= 0 else 'S'
+
+        longitude_deg = int(abs(longitude))
+        longitude_min = int((abs(longitude) - longitude_deg) * 60)
+        longitude_sec = int(((abs(longitude) - longitude_deg) * 60 - longitude_min) * 60)
+        longitude_ref = 'E' if longitude >= 0 else 'W'
+
+        # Atualiza os dados EXIF com as novas coordenadas
+        exif_dict['GPS'][piexif.GPSIFD.GPSLatitude] = (
+            (latitude_deg, 1), (latitude_min, 1), (latitude_sec, 1)
+        )
+        exif_dict['GPS'][piexif.GPSIFD.GPSLongitude] = (
+            (longitude_deg, 1), (longitude_min, 1), (longitude_sec, 1)
+        )
+        exif_dict['GPS'][piexif.GPSIFD.GPSLatitudeRef] = latitude_ref
+        exif_dict['GPS'][piexif.GPSIFD.GPSLongitudeRef] = longitude_ref
+
+        # Salva os dados EXIF de volta na imagem
+        piexif.insert(piexif.dump(exif_dict), image_path)
+
+        return True
+    except Exception as e:
+        print(f"Erro ao adicionar informações de localização: {e}")
+        return False
+
+#=======================================
+# FUNÇÃO: 
+#=======================================
+def read_geolocation_from_image(image_path):
+    try:
+        # Carrega os dados EXIF da imagem
+        exif_dict = piexif.load(image_path)
+
+        # Verifica se há informações de GPS nos dados EXIF
+        if 'GPS' in exif_dict:
+            latitude = exif_dict['GPS'][piexif.GPSIFD.GPSLatitude]
+            longitude = exif_dict['GPS'][piexif.GPSIFD.GPSLongitude]
+
+            # Converte as coordenadas para graus decimais
+            latitude_decimal = (
+                latitude[0][0] / latitude[0][1] +
+                latitude[1][0] / latitude[1][1] / 60 +
+                latitude[2][0] / latitude[2][1] / 3600
+            ) * (-1 if exif_dict['GPS'][piexif.GPSIFD.GPSLatitudeRef] == 'S' else 1)
+
+            longitude_decimal = (
+                longitude[0][0] / longitude[0][1] +
+                longitude[1][0] / longitude[1][1] / 60 +
+                longitude[2][0] / longitude[2][1] / 3600
+            ) * (-1 if exif_dict['GPS'][piexif.GPSIFD.GPSLongitudeRef] == 'W' else 1)
+
+            return latitude_decimal, longitude_decimal
+        else:
+            return None
+    except Exception as e:
+        print(f"Erro ao ler informações de localização: {e}")
+        return None
+    
+#=======================================
+# FUNÇÃO: le_dados_geolocalização
+#=======================================    
+def le_dados_geolocalizacao(directory_path, file):
+
+    # Adiciona as informações de localização à imagem
+    image_path = os.path.join(directory_path, file)
+
+    # Lê as informações de localização da imagem
+    read_coordinates = read_geolocation_from_image(image_path)
+
+    return(read_coordinates)
+
+#=======================================
+# FUNÇÃO: processa_arquivos_no_diretorio
+#=======================================
+def processa_arquivos_no_diretorio(directory_path):
+    try:
+        # Lista todos os arquivos no diretório
+        files = [f for f in os.listdir(directory_path) if os.path.isfile(os.path.join(directory_path, f))]
+
+        for file in files:
+            # Verifica se o arquivo é uma imagem (extensões comuns)
+            if file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+                # Gera coordenadas aleatórias
+                coordinates = gera_coordenadas()
+
+                # Adiciona as informações de localização à imagem
+                image_path = os.path.join(directory_path, file)
+                add_geolocation_to_image(image_path, coordinates[0], coordinates[1])
+
+                # Lê as informações de localização da imagem
+                read_coordinates = read_geolocation_from_image(image_path)            
+
+    except Exception as e:
+        print(f"Erro ao processar arquivos no diretório: {e}")
+
+#===================================
+# FUNÇÃO: remove_caracteres
+#===================================
+def remove_caracteres(sequencia):
+    # Inicializa uma lista vazia para armazenar os caracteres alfanuméricos
+    nova_sequencia = []
+
+    # Itera sobre cada caractere na sequência fornecida
+    for char in sequencia:
+        # Adiciona o caractere à nova sequência se for alfanumérico
+        if char.isalnum():
+            nova_sequencia.append(char)
+
+    # Converte a lista de caracteres de volta para uma string
+    resultado = ''.join(nova_sequencia)
+    resultado_com_hifen = insere_hifen(resultado)
+    return resultado_com_hifen
+
+#===================================
+# FUNÇÃO: insere_hifen
+#===================================
+def insere_hifen(sequencia):
+    # Insere um '-' após o terceiro caractere
+    nova_sequencia = sequencia[:3] + '-' + sequencia[3:]
+    return nova_sequencia
+
+#========================================
+# FUNÇÃO: encontrar_sequencias_numericas
+#========================================
+def encontrar_sequencias_numericas(padrao, string):
+    # Padrão regex para procurar sequências de sete dígitos consecutivos
+    # Encontrar todas as correspondências na string
+    correspondencias = re.findall(padrao, string)
+    return correspondencias
+
+#========================================
+# FUNÇÃO: le_arquivos
+#========================================
+def le_arquivos(diretorio):
+    try:
+        # Lista todos os arquivos no diretório
+        arquivos = os.listdir(diretorio)
+        return arquivos
+
+    except FileNotFoundError:
+        print(f'O diretório "{diretorio}" não foi encontrado.')
+    except PermissionError:
+        print(f'Permissão negada para acessar o diretório "{diretorio}".')
+
+#========================================
+# FUNÇÃO: reconhecer_texto
+#========================================
+def reconhecer_texto(image_path):
+    # Lendo a imagem
+    image = cv2.imread(image_path)
+
+    # Convertendo a imagem para escala de cinza
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Utilizando pytesseract para extrair texto da imagem com segmentação de página
+    texto_reconhecido = pytesseract.image_to_string(gray_image, config='--psm 6')
+
+    return texto_reconhecido
+
+#========================================
+# FUNÇÃO: reconhecer_texto
+#========================================
+def mostra_placa(directory_path, str_arquivo, str_placa):
+
+    if str_arquivo.startswith("rot_"):
+        # Suprime as quatro primeiras letras
+        str_arquivo = str_arquivo[4:]
+
+    read_coordinates = le_dados_geolocalizacao(directory_path, str_arquivo)
+    #print(f"dados recebidos: {directory_path} {str_arquivo} {str_placa}")
+
+    #---------------------------------------------------------------------
+    # Verifica restrição de geolocalização
+    #---------------------------------------------------------------------
+    if read_coordinates[1] < 29: 
+
+        #----------------
+        # Tem restrição!
+        #----------------       
+        print(f"Placa encontrada! ({str_arquivo}):  \t{str_placa} (*)")
+
+    else:
+
+        #----------------
+        # Sem restrição
+        #----------------         
+        print(f"Placa encontrada! ({str_arquivo}):  \t{str_placa}")
+
+    global total_placas
+    total_placas=total_placas+1
+
+#========================================
+# FUNÇÃO: rotacionar_imagem
+#========================================
+def rotacionar_imagem(diretorio, arquivo, graus):
+
+    # Abrir a imagem
+    imagem = Image.open(diretorio+"\\"+arquivo)
+                                       
+    # Rotacionar a imagem
+    imagem_rotacionada = imagem.rotate(graus) 
+
+    # Salvar a imagem rotacionada
+    imagem_rotacionada.save(diretorio+"\\"+"rot_"+arquivo)
+    return("rot_"+arquivo)   
+
+#========================================
+# FUNÇÃO: pagar_arquivos_temp
+#========================================
+def apagar_arquivos_temp(diretorio):
+    # Obtém a lista de arquivos no diretório
+    lista_arquivos = os.listdir(diretorio)
+
+    # Itera sobre os arquivos no diretório
+    for arquivo in lista_arquivos:
+
+        # Verifica se o nome do arquivo começa com "rot"
+        if arquivo.startswith("rot"):
+
+            # Constrói o caminho completo do arquivo
+            caminho_arquivo = os.path.join(diretorio, arquivo)
+
+            try:
+                # Exclui o arquivo
+                os.remove(caminho_arquivo)
+                #print(f"Arquivo excluído: {caminho_arquivo}")
+
+            except Exception as e:
+                print(f"Erro ao excluir {caminho_arquivo}: {e}")
+
+#========================================
+# FUNÇÃO: analisa_imagem
+#========================================
+def analisa_imagem(dir_placas,arquivo):
+    
+    bRet = False
+    #---------------------------------------------------
+    # para cada arquivo, tenta extrair o número da placa
+    #---------------------------------------------------
+    texto_reconhecido = reconhecer_texto(dir_placas + "\\" + arquivo)
+    texto_reconhecido_tratado = remove_caracteres(texto_reconhecido)
+
+    #---------------------------------------------------
+    # Verifica se uma string de placa foi encontrada.
+    #---------------------------------------------------      
+    #print(len(texto_reconhecido))  
+    if len(texto_reconhecido)==(9):
+        
+        bRet = True  
+        #----------------------------------------------------------------------
+        # Tamanho certo. Possível string de placa encontrada! Trata e Imprime.
+        #----------------------------------------------------------------------
+        mostra_placa(dir_placas, arquivo, texto_reconhecido_tratado)
+        
+    else:
+        #-------------------------------------------------------------------
+        # Não encontrou identificação esperada. Precisará tratamento extra.
+        #------------------------------------------------------------------- 
+        #print(f"<+++> Nenhum número reconhecido na imagem: {texto_reconhecido} (no arquivo: {arquivo})"
+
+        #-------------------------------------------------------------
+        # Encontrar sequências de oito dígitos consecutivos na string
+        # com:
+        #    a) os três primeiros caracteres definidos como letras
+        #    b) o quarto caracter não é uma letra
+        #    c) os próximos quadro podem ser letras ou números
+        #-------------------------------------------------------------
+        padrao = re.compile(r'[a-zA-Z]{3}[0-9\-:]{1}[0-9a-zA-Z\-:]{4}')
+        sequencias_encontradas = encontrar_sequencias_numericas(padrao, texto_reconhecido)
+
+        #--------------------------------------------------------------
+        # Verificar se há sequencias compatíveis com o padrão definido
+        #--------------------------------------------------------------
+        if sequencias_encontradas:
+              
+           #-------------------------------------------------------------------
+           # Várias strings identificadas. Procurar padrão de placa entre elas.
+           #------------------------------------------------------------------- 
+           bRet = True             
+           for sequencia in sequencias_encontradas:
+               #print(sequencia)
+               #print(f"Número reconhecido na imagem: {sequencia} (no arquivo: {arquivo})")
+               texto_reconhecido_tratado = remove_caracteres(sequencia)
+               mostra_placa(dir_placas, arquivo, texto_reconhecido_tratado)
+               
+        #else:
+           #-------------------------------------------------------------------   
+           # Nenhuma sequencia compatível com o padrão
+           # ------------------------------------------------------------------           
+           #print(f"> Nenhum número reconhecido na imagem:  (no arquivo: {arquivo})")
+
+    return(bRet)
+
+#=====================================================================================
+#                                Programa Principal
+#=====================================================================================
+if __name__ == "__main__":
+
+    #---------------------------------------------------
+    # Lê arquivos de placas no diretório especificado
+    #---------------------------------------------------
+    dir_placas = '.\placas'
+    arquivos = le_arquivos(dir_placas)
+    total_arquivos = len(arquivos)
+    total_placas = 0
+    max_var_graus = 16
+    var_graus = 2
+
+    #---------------------------------------------------
+    # Apaga arquivos temporários
+    #---------------------------------------------------             
+    apagar_arquivos_temp(dir_placas)  
+
+    print(f"=============================================")
+    print(f"|   Programa para Identificação de Placas   |")
+    print(f"=============================================")
+
+    #----------------------------------------------------------
+    # Inserindo dados de geolocalização nos arquivos de imagem
+    #----------------------------------------------------------
+    print(f"\nAdicionando dados de geolocalização aleatórios nas imagens ...")
+    processa_arquivos_no_diretorio(dir_placas)
+
+    #----------------------------------------------------------
+    # Inicio da analise dos arquivos de imagem
+    #----------------------------------------------------------
+    print(f"Analisando imagens ...\n")
+
+    #-------------------------------------------------------
+    # Loop de tratamento dos arquivos de imagens de placas
+    #-------------------------------------------------------
+    for arquivo in arquivos:
+
+        #---------------------------------------------------
+        # Analisa cada imagem
+        #---------------------------------------------------
+        if analisa_imagem(dir_placas, arquivo):
+           
+           #---------------------------------------------------
+           # Identificou uma placa na imagem!
+           #---------------------------------------------------
+           print(f"Achou!")
+
+        else:
+           #------------------------------------------------------
+           # Não identificou uma placa na imagem. Faz tratamento.
+           #------------------------------------------------------           
+           graus = max_var_graus
+           while graus > 0:    
+
+                novo_arquivo = rotacionar_imagem(dir_placas,arquivo,-1*graus)
+
+                #---------------------------------------------------
+                # Reanaliza a imagem após tratamento (Parte I)
+                #---------------------------------------------------                
+                if analisa_imagem(dir_placas, novo_arquivo):
+                    print(f"achou após rotação de -{graus} graus")
+                   #---------------------------------------------------                     
+                   # Conseguiu identificar a placa. Sai do retratamento.
+                   #--------------------------------------------------- 
+                    break
+
+                else:
+                   #---------------------------------------------------
+                   # Reanaliza a imagem após tratamento (Parte II)
+                   #---------------------------------------------------                       
+                   novo_arquivo = rotacionar_imagem(dir_placas,arquivo,graus)
+
+                   if analisa_imagem(dir_placas, novo_arquivo):
+                       #---------------------------------------------------                       
+                       # Conseguiu identificar a placa. Sai do retratamento.
+                       #---------------------------------------------------                       
+                       print(f"achou após rotação de {graus} graus")
+                       break 
+
+                #---------------------------------------------------
+                # Tenta novamente
+                #---------------------------------------------------                     
+                graus = graus-var_graus
+
+    #---------------------------------------------------
+    # Relatório Final
+    #--------------------------------------------------- 
+    print(f"=============================================")
+    print(f"|            RELATÓRIO FINAL                |")
+    print(f"=============================================")
+    print(f"\tTotal de imagems: {total_arquivos}")
+    print(f"\tTotal de placas:  {total_placas}")
+    percentual = round(total_placas*100/total_arquivos,2)
+    print(f"\tTaxa de sucesso:  {percentual} %")    
+    print(f"=============================================")    
+    
+ 
